@@ -1,0 +1,26 @@
+# Build directories
+build/
+bin/
+
+# Object files
+*.o
+*.obj
+
+# Plugin files
+*.so
+*.dll
+
+# IDE files
+.vscode/
+.vs/
+*.vcxproj*
+*.sln
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*~
+*.tmp
+*.bak 
