@@ -20,37 +20,47 @@ if ! command -v wget &> /dev/null; then
     exit 1
 fi
 
-# Create a temporary directory
-TEMP_DIR=$(mktemp -d)
-cd "$TEMP_DIR"
+# Set SDK version and URLs
+SDK_VERSION=26
+SDK_ARCHIVE="${SDK_VERSION}.tar.gz"
+SDK_URL="https://github.com/teamspeak/ts3client-pluginsdk/archive/refs/tags/${SDK_VERSION}.tar.gz"
+SDK_DIR="ts3client-pluginsdk-${SDK_VERSION}"
+
+# Download the SDK
+if [ -d "$SDK_DIR" ]; then
+    echo -e "${GREEN}SDK directory already exists: $SDK_DIR${NC}"
+    exit 0
+fi
 
 echo -e "${YELLOW}Downloading TeamSpeak 3 Client SDK...${NC}"
-# Download the SDK
-wget -q --show-progress https://files.teamspeak-services.com/releases/client/3.6.1/TeamSpeak3-Client-sdk_3.6.1.tar.bz2
-
+wget -O "$SDK_ARCHIVE" "$SDK_URL"
 if [ $? -ne 0 ]; then
     echo -e "${RED}Error: Failed to download the SDK${NC}"
-    rm -rf "$TEMP_DIR"
     exit 1
 fi
 
 echo -e "${YELLOW}Extracting SDK...${NC}"
-# Extract the SDK
-tar xf TeamSpeak3-Client-sdk_3.6.1.tar.bz2
-
+tar -xzf "$SDK_ARCHIVE"
 if [ $? -ne 0 ]; then
     echo -e "${RED}Error: Failed to extract the SDK${NC}"
-    rm -rf "$TEMP_DIR"
+    rm -f "$SDK_ARCHIVE"
     exit 1
 fi
 
-# Move the SDK to the project directory
-echo -e "${YELLOW}Moving SDK to project directory...${NC}"
-mv ts3client-pluginsdk-* "$OLDPWD"
+# Rename the extracted folder to match README instructions
+EXTRACTED_DIR="ts3client-pluginsdk-${SDK_VERSION}"
+if [ ! -d "$EXTRACTED_DIR" ]; then
+    # Try to find the extracted directory
+    EXTRACTED_DIR=$(tar -tzf "$SDK_ARCHIVE" | head -1 | cut -f1 -d"/")
+fi
+
+if [ "$EXTRACTED_DIR" != "$SDK_DIR" ] && [ -d "$EXTRACTED_DIR" ]; then
+    mv "$EXTRACTED_DIR" "$SDK_DIR"
+fi
 
 # Clean up
-cd "$OLDPWD"
-rm -rf "$TEMP_DIR"
+rm -f "$SDK_ARCHIVE"
 
 echo -e "${GREEN}SDK setup complete!${NC}"
+echo "SDK directory: $SDK_DIR"
 echo "You can now run ./build.sh to build the plugin" 
