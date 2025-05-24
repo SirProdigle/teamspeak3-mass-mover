@@ -19,10 +19,10 @@ A lightweight TeamSpeak 3 plugin that adds a "MassMove here" context menu option
 
 ### Technical Details
 The plugin uses a recursive depth-first search algorithm to:
-1. Find all subchannels of the target channel
+1. Find all channels in the family of the target channel
 2. Collect all users from these channels
 3. Move users in batches to the target channel
-4. Handle the current user separately to avoid permission issues
+4. Move the executing user
 
 ## 🛠️ Building
 
