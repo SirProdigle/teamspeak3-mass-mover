@@ -82,7 +82,7 @@ const char* ts3plugin_name()
 /* Plugin version */
 const char* ts3plugin_version()
 {
-    return "1.0.0";
+    return "1.0.1";
 }
 
 /* Plugin API version */
@@ -248,7 +248,7 @@ static anyID* collectClientsFromChannels(uint64 serverConnectionHandlerID, uint6
         /* Add each client to our list */
         for (j = 0; channelClients[j] != 0; j++) {
             /* Expand array if needed */
-            if (totalClients >= capacity) {
+            if (totalClients >= capacity - 1) { /* Leave room for terminator */
                 capacity *= 2;
                 allClients = (anyID*)realloc(allClients, capacity * sizeof(anyID));
             }
@@ -261,6 +261,9 @@ static anyID* collectClientsFromChannels(uint64 serverConnectionHandlerID, uint6
         /* Free the channel client list */
         ts3Functions.freeMemory(channelClients);
     }
+    
+    /* Terminate the array with 0 */
+    allClients[totalClients] = 0;
     
     *clientCount = totalClients;
     return allClients;
@@ -278,22 +281,35 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
         int clientCount;
         char returnCode[RETURNCODE_BUFSIZE];
         unsigned int error;
+        char msg[512];
         
-        printf("MASSMOVER: MassMove triggered for channel %llu\n", (unsigned long long)targetChannelID);
+        snprintf(msg, sizeof(msg), "MassMover: Starting mass move operation for channel %llu", (unsigned long long)targetChannelID);
+        ts3Functions.logMessage(msg, LogLevel_INFO, "Plugin", serverConnectionHandlerID);
         
         /* Allocate initial channel array and add the target channel */
         channels = (uint64*)malloc(capacity * sizeof(uint64));
+        if (!channels) {
+            ts3Functions.logMessage("MassMover: Failed to allocate memory for channels", LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
+            return;
+        }
         channels[0] = targetChannelID;
         
         /* Collect all subchannels recursively */
         collectSubchannels(serverConnectionHandlerID, targetChannelID, &channels, &channelCount, &capacity);
         
-        printf("MASSMOVER: Found %d channels to move clients from\n", channelCount);
+        snprintf(msg, sizeof(msg), "MassMover: Found %d channels to move clients from", channelCount);
+        ts3Functions.logMessage(msg, LogLevel_INFO, "Plugin", serverConnectionHandlerID);
         
         /* Collect all clients from these channels */
         clientsToMove = collectClientsFromChannels(serverConnectionHandlerID, channels, channelCount, &clientCount);
+        if (!clientsToMove) {
+            ts3Functions.logMessage("MassMover: Failed to collect clients from channels", LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
+            free(channels);
+            return;
+        }
         
-        printf("MASSMOVER: Found %d clients to move\n", clientCount);
+        snprintf(msg, sizeof(msg), "MassMover: Found %d clients to move", clientCount);
+        ts3Functions.logMessage(msg, LogLevel_INFO, "Plugin", serverConnectionHandlerID);
         
         if (clientCount > 0) {
             /* Create return code for the move operation */
@@ -302,12 +318,14 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
             /* Move all clients to the target channel */
             error = ts3Functions.requestClientsMove(serverConnectionHandlerID, clientsToMove, targetChannelID, "", returnCode);
             if (error != ERROR_ok) {
-                printf("MASSMOVER: Error moving clients: %d\n", error);
-                ts3Functions.logMessage("MassMover: Error moving clients", LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
+                snprintf(msg, sizeof(msg), "MassMover: Error moving clients: %d", error);
+                ts3Functions.logMessage(msg, LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
             } else {
-                printf("MASSMOVER: Successfully initiated move for %d clients\n", clientCount);
-                ts3Functions.logMessage("MassMover: Mass move initiated", LogLevel_INFO, "Plugin", serverConnectionHandlerID);
+                snprintf(msg, sizeof(msg), "MassMover: Successfully initiated move for %d clients to channel %llu", clientCount, (unsigned long long)targetChannelID);
+                ts3Functions.logMessage(msg, LogLevel_INFO, "Plugin", serverConnectionHandlerID);
             }
+        } else {
+            ts3Functions.logMessage("MassMover: No clients found to move", LogLevel_INFO, "Plugin", serverConnectionHandlerID);
         }
         
         /* Cleanup */

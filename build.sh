@@ -16,6 +16,12 @@ gcc -c -O2 -Wall -fPIC -std=gnu99 -Its3client-pluginsdk-26/include src/massmover
 gcc -shared -o bin/linux/massmover.so build/linux/massmover.o
 echo "✓ Linux build complete: bin/linux/massmover.so"
 
+
+# Copy to Flatpak location
+echo "Copying to Flatpak TeamSpeak 3 plugins directory..."
+cp bin/linux/massmover.so ~/.var/app/com.teamspeak.TeamSpeak3/.ts3client/plugins
+echo "✓ Plugin copied to Flatpak location"
+
 # Build for Windows (using MinGW cross-compiler if available)
 if command -v x86_64-w64-mingw32-gcc &> /dev/null; then
     echo "Building for Windows (MinGW cross-compiler)..."
@@ -38,7 +44,8 @@ echo ""
 echo "Build complete!"
 echo ""
 echo "Installation:"
-echo "  Linux:   Copy bin/linux/massmover.so to ~/.ts3client/plugins/"
-echo "  Windows: Copy bin/windows/massmover.dll to %APPDATA%\\TS3Client\\plugins\\"
+echo "  Linux (Flatpak): Plugin has been automatically installed to Flatpak TeamSpeak 3"
+echo "  Linux (Native):  Copy bin/linux/massmover.so to ~/.ts3client/plugins/"
+echo "  Windows:        Copy bin/windows/massmover.dll to %APPDATA%\\TS3Client\\plugins\\"
 echo ""
 echo "Then restart TeamSpeak and enable the plugin in Settings > Plugins" 
