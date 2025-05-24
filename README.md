@@ -28,7 +28,18 @@ The plugin uses a recursive depth-first search algorithm to:
 
 ### Prerequisites
 - GCC compiler
-- TeamSpeak 3 Client SDK (included)
+- TeamSpeak 3 Client SDK
+
+### Getting the SDK
+1. Download the TeamSpeak 3 Client SDK from the [official website](https://www.teamspeak.com/en/downloads/#sdk)
+2. Extract the SDK to the project root directory
+3. The SDK directory should be named `ts3client-pluginsdk-26` (or similar)
+
+Or use our automatic setup script:
+```bash
+chmod +x setup_sdk.sh
+./setup_sdk.sh
+```
 
 ### Quick Build
 ```bash

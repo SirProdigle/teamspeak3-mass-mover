@@ -1,3 +1,6 @@
+# TeamSpeak 3 SDK
+ts3client-pluginsdk-*/
+
 # Build directories
 build/
 bin/
@@ -23,4 +26,13 @@ Thumbs.db
 # Temporary files
 *~
 *.tmp
-*.bak 
+*.bak
+
+# Compiled files
+*.dylib
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb 
