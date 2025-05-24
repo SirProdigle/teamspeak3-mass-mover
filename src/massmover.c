@@ -82,7 +82,7 @@ const char* ts3plugin_name()
 /* Plugin version */
 const char* ts3plugin_version()
 {
-    return "1.0.1";
+    return "1.2.0";
 }
 
 /* Plugin API version */
@@ -222,6 +222,36 @@ static void collectSubchannels(uint64 serverConnectionHandlerID, uint64 parentCh
     ts3Functions.freeMemory(channelList);
 }
 
+/* Function to collect parent channels up to a certain level */
+static void collectParentChannels(uint64 serverConnectionHandlerID, uint64 channelID, uint64** channels, int* channelCount, int* capacity)
+{
+    uint64 currentChannelID = channelID;
+    unsigned int error;
+    
+    while (1) {
+        uint64 parentChannelID;
+        
+        /* Get the parent of current channel */
+        error = ts3Functions.getParentChannelOfChannel(serverConnectionHandlerID, currentChannelID, &parentChannelID);
+        if (error != ERROR_ok || parentChannelID == 0) {
+            break;  // Stop if we hit an error or reach the root channel
+        }
+        
+        /* Expand array if needed */
+        if (*channelCount >= *capacity) {
+            *capacity *= 2;
+            *channels = (uint64*)realloc(*channels, *capacity * sizeof(uint64));
+        }
+        
+        /* Add parent channel to our list */
+        (*channels)[*channelCount] = parentChannelID;
+        (*channelCount)++;
+        
+        /* Move up to parent channel */
+        currentChannelID = parentChannelID;
+    }
+}
+
 /* Function to collect all clients from a list of channels */
 static anyID* collectClientsFromChannels(uint64 serverConnectionHandlerID, uint64* channels, int channelCount, int* clientCount)
 {
@@ -293,6 +323,9 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
             return;
         }
         channels[0] = targetChannelID;
+        
+        /* Collect parent channels */
+        collectParentChannels(serverConnectionHandlerID, targetChannelID, &channels, &channelCount, &capacity);
         
         /* Collect all subchannels recursively */
         collectSubchannels(serverConnectionHandlerID, targetChannelID, &channels, &channelCount, &capacity);
