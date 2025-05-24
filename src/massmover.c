@@ -362,7 +362,7 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
         uint64 targetChannelID = selectedItemID;
         uint64* channels = NULL;
         int channelCount = 1; /* Start with 1 for the target channel itself */
-        int capacity = 16;
+        int capacity = 1024;
         anyID* clientsToMove = NULL;
         int clientCount;
         char returnCode[RETURNCODE_BUFSIZE];
