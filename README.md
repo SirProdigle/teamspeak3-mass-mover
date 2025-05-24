@@ -5,7 +5,7 @@ A lightweight TeamSpeak 3 plugin that adds a "MassMove here" context menu option
 ## 🚀 Features
 
 - **One-click mass move**: Right-click any channel and select "MassMove here"
-- **Recursive channel traversal**: Automatically finds and moves users from all subchannels
+- **Recursive channel traversal**: Automatically finds and moves users from all channels belonging to the same tree (parents, children, children of parents, etc.)
 - **Cross-platform**: Works on both Windows and Linux
 - **Lightweight**: Minimal resource usage with efficient algorithms
 - **Safe**: Proper error handling and memory management
