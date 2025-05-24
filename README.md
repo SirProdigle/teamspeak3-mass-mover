@@ -15,7 +15,7 @@ A lightweight TeamSpeak 3 plugin that adds a "MassMove here" context menu option
 ### User Perspective
 1. Right-click on any channel in the TeamSpeak channel tree
 2. Select "MassMove here" from the context menu
-3. All users from that channel and its subchannels will be moved to the target channel
+3. All users from that channel and its entire family will be moved to that channel (this includes, parents, children, children of parents, etc.)
 
 ### Technical Details
 The plugin uses a recursive depth-first search algorithm to:
