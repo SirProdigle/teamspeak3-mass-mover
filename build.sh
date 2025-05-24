@@ -12,7 +12,7 @@ mkdir -p build/linux build/windows bin/linux bin/windows
 
 # Build for Linux
 echo "Building for Linux..."
-gcc -c -O2 -Wall -fPIC -std=gnu99 -Its3client-pluginsdk-26/include src/massmover.c -o build/linux/massmover.o
+gcc -c -g -O0 -Wall -fPIC -std=gnu99 -Its3client-pluginsdk-26/include src/massmover.c -o build/linux/massmover.o
 gcc -shared -o bin/linux/massmover.so build/linux/massmover.o
 echo "✓ Linux build complete: bin/linux/massmover.so"
 

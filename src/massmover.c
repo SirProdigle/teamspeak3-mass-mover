@@ -1,8 +1,20 @@
 /*
  * TeamSpeak 3 MassMover Plugin
  * 
- * Adds a context menu item "MassMove here" to channels that moves
- * all users from that channel and its subchannels to the target channel.
+ * This plugin adds a "MassMove here" context menu option to TeamSpeak 3 channels.
+ * When activated, it moves all users from the target channel and its entire
+ * subchannel hierarchy to the right-clicked channel.
+ *
+ * Key Features:
+ * - One-click mass move of all users from a channel and its subchannels
+ * - Recursive channel traversal to find all users
+ * - Cross-platform support (Windows and Linux)
+ * - Safe memory management and error handling
+ * - Detailed logging for troubleshooting
+ *
+ * Author: Generated Plugin
+ * Version: 1.2.0
+ * License: Free to use and modify
  */
 
 #if defined(WIN32) || defined(__WIN32__) || defined(_WIN32)
@@ -15,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* TeamSpeak 3 SDK Headers */
 #include "teamspeak/public_definitions.h"
 #include "teamspeak/public_errors.h"
 #include "teamspeak/public_errors_rare.h"
@@ -24,34 +37,40 @@
 
 #include "massmover.h"
 
-static struct TS3Functions ts3Functions;
+/* Global Variables */
+static struct TS3Functions ts3Functions;  /* TeamSpeak 3 API function pointers */
+static char* pluginID = NULL;            /* Plugin's unique identifier */
 
+/* Constants */
+#define PLUGIN_API_VERSION 26            /* TeamSpeak 3 API version we're using */
+#define PATH_BUFSIZE 512                 /* Buffer size for file paths */
+#define RETURNCODE_BUFSIZE 128           /* Buffer size for return codes */
+#define MENU_ID_MASSMOVE 1              /* ID for our context menu item */
+
+/* Platform-specific string handling */
 #ifdef _WIN32
 #define _strcpy(dest, destSize, src) strcpy_s(dest, destSize, src)
 #define snprintf sprintf_s
 #else
-#define _strcpy(dest, destSize, src)                                                                                                                                                                                                                           \
-    {                                                                                                                                                                                                                                                          \
-        strncpy(dest, src, destSize - 1);                                                                                                                                                                                                                      \
-        (dest)[destSize - 1] = '\0';                                                                                                                                                                                                                           \
+#define _strcpy(dest, destSize, src) \
+    { \
+        strncpy(dest, src, destSize - 1); \
+        (dest)[destSize - 1] = '\0'; \
     }
 #endif
 
-#define PLUGIN_API_VERSION 26
-#define PATH_BUFSIZE 512
-#define RETURNCODE_BUFSIZE 128
-
-static char* pluginID = NULL;
-
-// Menu item ID for our MassMove context menu
-enum { MENU_ID_MASSMOVE = 1 };
+/* Function Prototypes */
+static struct PluginMenuItem* createMenuItem(enum PluginMenuType type, int id, const char* text, const char* icon);
+static void collectSubchannels(uint64 serverConnectionHandlerID, uint64 parentChannelID, uint64** channels, int* channelCount, int* capacity);
+static void collectParentChannels(uint64 serverConnectionHandlerID, uint64 channelID, uint64** channels, int* channelCount, int* capacity);
+static anyID* collectClientsFromChannels(uint64 serverConnectionHandlerID, uint64* channels, int channelCount, int* clientCount);
 
 #ifdef _WIN32
 /* Helper function to convert wchar_T to Utf-8 encoded strings on Windows */
 static int wcharToUtf8(const wchar_t* str, char** result)
 {
     int outlen = WideCharToMultiByte(CP_UTF8, 0, str, -1, 0, 0, 0, 0);
-    *result    = (char*)malloc(outlen);
+    *result = (char*)malloc(outlen);
     if (WideCharToMultiByte(CP_UTF8, 0, str, -1, *result, outlen, 0, 0) == 0) {
         *result = NULL;
         return -1;
@@ -60,7 +79,7 @@ static int wcharToUtf8(const wchar_t* str, char** result)
 }
 #endif
 
-/*********************************** Required functions ************************************/
+/*********************************** Required Plugin Functions ************************************/
 
 /* Unique name identifying this plugin */
 const char* ts3plugin_name()
@@ -127,7 +146,7 @@ void ts3plugin_shutdown()
     }
 }
 
-/****************************** Optional functions ********************************/
+/****************************** Optional Plugin Functions ********************************/
 
 /* Tell client we don't offer a configuration window */
 int ts3plugin_offersConfigure()
@@ -139,7 +158,7 @@ int ts3plugin_offersConfigure()
 void ts3plugin_registerPluginID(const char* id)
 {
     const size_t sz = strlen(id) + 1;
-    pluginID        = (char*)malloc(sz * sizeof(char));
+    pluginID = (char*)malloc(sz * sizeof(char));
     _strcpy(pluginID, sz, id);
     printf("MASSMOVER: registerPluginID: %s\n", pluginID);
 }
@@ -148,8 +167,13 @@ void ts3plugin_registerPluginID(const char* id)
 static struct PluginMenuItem* createMenuItem(enum PluginMenuType type, int id, const char* text, const char* icon)
 {
     struct PluginMenuItem* menuItem = (struct PluginMenuItem*)malloc(sizeof(struct PluginMenuItem));
+    if (!menuItem) {
+        printf("MASSMOVER: Failed to allocate memory for menu item\n");
+        return NULL;
+    }
+    
     menuItem->type = type;
-    menuItem->id   = id;
+    menuItem->id = id;
     _strcpy(menuItem->text, PLUGIN_MENU_BUFSZ, text);
     _strcpy(menuItem->icon, PLUGIN_MENU_BUFSZ, icon);
     return menuItem;
@@ -162,9 +186,21 @@ void ts3plugin_initMenus(struct PluginMenuItem*** menuItems, char** menuIcon)
     
     /* Allocate memory for 2 menu items (1 item + NULL terminator) */
     items = (struct PluginMenuItem**)malloc(2 * sizeof(struct PluginMenuItem*));
+    if (!items) {
+        printf("MASSMOVER: Failed to allocate memory for menu items\n");
+        *menuItems = NULL;
+        *menuIcon = NULL;
+        return;
+    }
     
     /* Create the "MassMove here" menu item for channels */
     items[0] = createMenuItem(PLUGIN_MENU_TYPE_CHANNEL, MENU_ID_MASSMOVE, "MassMove here", "");
+    if (!items[0]) {
+        free(items);
+        *menuItems = NULL;
+        *menuIcon = NULL;
+        return;
+    }
     
     /* Terminate array with NULL */
     items[1] = NULL;
@@ -174,7 +210,9 @@ void ts3plugin_initMenus(struct PluginMenuItem*** menuItems, char** menuIcon)
     
     /* Optional icon for the plugin menu (not used here) */
     *menuIcon = (char*)malloc(PLUGIN_MENU_BUFSZ * sizeof(char));
-    _strcpy(*menuIcon, PLUGIN_MENU_BUFSZ, "");
+    if (*menuIcon) {
+        _strcpy(*menuIcon, PLUGIN_MENU_BUFSZ, "");
+    }
 }
 
 /* Recursive function to collect all subchannels of a given channel */
@@ -207,6 +245,11 @@ static void collectSubchannels(uint64 serverConnectionHandlerID, uint64 parentCh
             if (*channelCount >= *capacity) {
                 *capacity *= 2;
                 *channels = (uint64*)realloc(*channels, *capacity * sizeof(uint64));
+                if (!*channels) {
+                    printf("MASSMOVER: Failed to reallocate memory for channels\n");
+                    ts3Functions.freeMemory(channelList);
+                    return;
+                }
             }
             
             /* Add this channel to our list */
@@ -234,13 +277,17 @@ static void collectParentChannels(uint64 serverConnectionHandlerID, uint64 chann
         /* Get the parent of current channel */
         error = ts3Functions.getParentChannelOfChannel(serverConnectionHandlerID, currentChannelID, &parentChannelID);
         if (error != ERROR_ok || parentChannelID == 0) {
-            break;  // Stop if we hit an error or reach the root channel
+            break;  /* Stop if we hit an error or reach the root channel */
         }
         
         /* Expand array if needed */
         if (*channelCount >= *capacity) {
             *capacity *= 2;
             *channels = (uint64*)realloc(*channels, *capacity * sizeof(uint64));
+            if (!*channels) {
+                printf("MASSMOVER: Failed to reallocate memory for parent channels\n");
+                return;
+            }
         }
         
         /* Add parent channel to our list */
@@ -262,6 +309,10 @@ static anyID* collectClientsFromChannels(uint64 serverConnectionHandlerID, uint6
     
     /* Allocate initial array */
     allClients = (anyID*)malloc(capacity * sizeof(anyID));
+    if (!allClients) {
+        printf("MASSMOVER: Failed to allocate memory for clients\n");
+        return NULL;
+    }
     
     /* For each channel, get its clients */
     for (i = 0; i < channelCount; i++) {
@@ -281,6 +332,11 @@ static anyID* collectClientsFromChannels(uint64 serverConnectionHandlerID, uint6
             if (totalClients >= capacity - 1) { /* Leave room for terminator */
                 capacity *= 2;
                 allClients = (anyID*)realloc(allClients, capacity * sizeof(anyID));
+                if (!allClients) {
+                    printf("MASSMOVER: Failed to reallocate memory for clients\n");
+                    ts3Functions.freeMemory(channelClients);
+                    return NULL;
+                }
             }
             
             /* Add client to list */
@@ -304,14 +360,24 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
 {
     if (type == PLUGIN_MENU_TYPE_CHANNEL && menuItemID == MENU_ID_MASSMOVE) {
         uint64 targetChannelID = selectedItemID;
-        uint64* channels;
+        uint64* channels = NULL;
         int channelCount = 1; /* Start with 1 for the target channel itself */
         int capacity = 16;
-        anyID* clientsToMove;
+        anyID* clientsToMove = NULL;
         int clientCount;
         char returnCode[RETURNCODE_BUFSIZE];
         unsigned int error;
         char msg[512];
+        anyID myID;
+        int i;
+        int myIDFound = 0;
+        
+        /* Get our own client ID */
+        error = ts3Functions.getClientID(serverConnectionHandlerID, &myID);
+        if (error != ERROR_ok) {
+            ts3Functions.logMessage("MassMover: Failed to get client ID", LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
+            return;
+        }
         
         snprintf(msg, sizeof(msg), "MassMover: Starting mass move operation for channel %llu", (unsigned long long)targetChannelID);
         ts3Functions.logMessage(msg, LogLevel_INFO, "Plugin", serverConnectionHandlerID);
@@ -327,8 +393,10 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
         /* Collect parent channels */
         collectParentChannels(serverConnectionHandlerID, targetChannelID, &channels, &channelCount, &capacity);
         
-        /* Collect all subchannels recursively */
-        collectSubchannels(serverConnectionHandlerID, targetChannelID, &channels, &channelCount, &capacity);
+        /* For each channel (including target and parents), collect their subchannels */
+        for (i = 0; i < channelCount; i++) {
+            collectSubchannels(serverConnectionHandlerID, channels[i], &channels, &channelCount, &capacity);
+        }
         
         snprintf(msg, sizeof(msg), "MassMover: Found %d channels to move clients from", channelCount);
         ts3Functions.logMessage(msg, LogLevel_INFO, "Plugin", serverConnectionHandlerID);
@@ -348,15 +416,68 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
             /* Create return code for the move operation */
             ts3Functions.createReturnCode(pluginID, returnCode, RETURNCODE_BUFSIZE);
             
-            /* Move all clients to the target channel */
-            error = ts3Functions.requestClientsMove(serverConnectionHandlerID, clientsToMove, targetChannelID, "", returnCode);
-            if (error != ERROR_ok) {
-                snprintf(msg, sizeof(msg), "MassMover: Error moving clients: %d", error);
-                ts3Functions.logMessage(msg, LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
-            } else {
-                snprintf(msg, sizeof(msg), "MassMover: Successfully initiated move for %d clients to channel %llu", clientCount, (unsigned long long)targetChannelID);
-                ts3Functions.logMessage(msg, LogLevel_INFO, "Plugin", serverConnectionHandlerID);
+            /* First move all other clients */
+            anyID* otherClients = NULL;
+            int otherClientCount = 0;
+            int otherClientCapacity = 16;
+            
+            /* Allocate initial array for other clients */
+            otherClients = (anyID*)malloc(otherClientCapacity * sizeof(anyID));
+            if (!otherClients) {
+                ts3Functions.logMessage("MassMover: Failed to allocate memory for other clients", LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
+                free(channels);
+                free(clientsToMove);
+                return;
             }
+            
+            /* Filter out our own ID from the client list */
+            for (i = 0; i < clientCount; i++) {
+                if (clientsToMove[i] == myID) {
+                    myIDFound = 1;
+                    continue;
+                }
+                
+                /* Expand array if needed */
+                if (otherClientCount >= otherClientCapacity - 1) {
+                    otherClientCapacity *= 2;
+                    otherClients = (anyID*)realloc(otherClients, otherClientCapacity * sizeof(anyID));
+                    if (!otherClients) {
+                        ts3Functions.logMessage("MassMover: Failed to reallocate memory for other clients", LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
+                        free(channels);
+                        free(clientsToMove);
+                        return;
+                    }
+                }
+                
+                otherClients[otherClientCount] = clientsToMove[i];
+                otherClientCount++;
+            }
+            
+            /* Terminate the array with 0 */
+            if (otherClientCount > 0) {
+                otherClients[otherClientCount] = 0;
+                
+                /* Move other clients */
+                error = ts3Functions.requestClientsMove(serverConnectionHandlerID, otherClients, targetChannelID, "", returnCode);
+                if (error != ERROR_ok) {
+                    snprintf(msg, sizeof(msg), "MassMover: Error moving other clients: %d", error);
+                    ts3Functions.logMessage(msg, LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
+                }
+            }
+            
+            /* Move ourselves separately */
+            if (myIDFound) {
+                error = ts3Functions.requestClientMove(serverConnectionHandlerID, myID, targetChannelID, "", returnCode);
+                if (error != ERROR_ok) {
+                    snprintf(msg, sizeof(msg), "MassMover: Error moving self: %d", error);
+                    ts3Functions.logMessage(msg, LogLevel_ERROR, "Plugin", serverConnectionHandlerID);
+                }
+            }
+            
+            snprintf(msg, sizeof(msg), "MassMover: Successfully initiated move for %d clients to channel %llu", clientCount, (unsigned long long)targetChannelID);
+            ts3Functions.logMessage(msg, LogLevel_INFO, "Plugin", serverConnectionHandlerID);
+            
+            free(otherClients);
         } else {
             ts3Functions.logMessage("MassMover: No clients found to move", LogLevel_INFO, "Plugin", serverConnectionHandlerID);
         }
@@ -376,7 +497,7 @@ int ts3plugin_onServerErrorEvent(uint64 serverConnectionHandlerID, const char* e
     return 0; /* Let other plugins handle this too */
 }
 
-/****************************** Unused callbacks ********************************/
+/****************************** Unused Plugin Callbacks ********************************/
 
 /* All the remaining callback functions that we don't need */
 void ts3plugin_currentServerConnectionChanged(uint64 serverConnectionHandlerID) {}
@@ -386,101 +507,3 @@ void ts3plugin_freeMemory(void* data) { free(data); }
 int ts3plugin_requestAutoload() { return 0; }
 void ts3plugin_initHotkeys(struct PluginHotkey*** hotkeys) { *hotkeys = NULL; }
 
-/* Stub implementations for all other callbacks */
-void ts3plugin_onConnectStatusChangeEvent(uint64 serverConnectionHandlerID, int newStatus, unsigned int errorNumber) {}
-void ts3plugin_onNewChannelEvent(uint64 serverConnectionHandlerID, uint64 channelID, uint64 channelParentID) {}
-void ts3plugin_onNewChannelCreatedEvent(uint64 serverConnectionHandlerID, uint64 channelID, uint64 channelParentID, anyID invokerID, const char* invokerName, const char* invokerUniqueIdentifier) {}
-void ts3plugin_onDelChannelEvent(uint64 serverConnectionHandlerID, uint64 channelID, anyID invokerID, const char* invokerName, const char* invokerUniqueIdentifier) {}
-void ts3plugin_onChannelMoveEvent(uint64 serverConnectionHandlerID, uint64 channelID, uint64 newChannelParentID, anyID invokerID, const char* invokerName, const char* invokerUniqueIdentifier) {}
-void ts3plugin_onUpdateChannelEvent(uint64 serverConnectionHandlerID, uint64 channelID) {}
-void ts3plugin_onUpdateChannelEditedEvent(uint64 serverConnectionHandlerID, uint64 channelID, anyID invokerID, const char* invokerName, const char* invokerUniqueIdentifier) {}
-void ts3plugin_onUpdateClientEvent(uint64 serverConnectionHandlerID, anyID clientID, anyID invokerID, const char* invokerName, const char* invokerUniqueIdentifier) {}
-void ts3plugin_onClientMoveEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, const char* moveMessage) {}
-void ts3plugin_onClientMoveSubscriptionEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility) {}
-void ts3plugin_onClientMoveTimeoutEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, const char* timeoutMessage) {}
-void ts3plugin_onClientMoveMovedEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID moverID, const char* moverName, const char* moverUniqueIdentifier, const char* moveMessage) {}
-void ts3plugin_onClientKickFromChannelEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID kickerID, const char* kickerName, const char* kickerUniqueIdentifier, const char* kickMessage) {}
-void ts3plugin_onClientKickFromServerEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID kickerID, const char* kickerName, const char* kickerUniqueIdentifier, const char* kickMessage) {}
-void ts3plugin_onClientIDsEvent(uint64 serverConnectionHandlerID, const char* uniqueClientIdentifier, anyID clientID, const char* clientName) {}
-void ts3plugin_onClientIDsFinishedEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onServerEditedEvent(uint64 serverConnectionHandlerID, anyID editerID, const char* editerName, const char* editerUniqueIdentifier) {}
-void ts3plugin_onServerUpdatedEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onServerStopEvent(uint64 serverConnectionHandlerID, const char* shutdownMessage) {}
-int ts3plugin_onTextMessageEvent(uint64 serverConnectionHandlerID, anyID targetMode, anyID toID, anyID fromID, const char* fromName, const char* fromUniqueIdentifier, const char* message, int ffIgnored) { return 0; }
-void ts3plugin_onTalkStatusChangeEvent(uint64 serverConnectionHandlerID, int status, int isReceivedWhisper, anyID clientID) {}
-void ts3plugin_onConnectionInfoEvent(uint64 serverConnectionHandlerID, anyID clientID) {}
-void ts3plugin_onServerConnectionInfoEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onChannelSubscribeEvent(uint64 serverConnectionHandlerID, uint64 channelID) {}
-void ts3plugin_onChannelSubscribeFinishedEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onChannelUnsubscribeEvent(uint64 serverConnectionHandlerID, uint64 channelID) {}
-void ts3plugin_onChannelUnsubscribeFinishedEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onChannelDescriptionUpdateEvent(uint64 serverConnectionHandlerID, uint64 channelID) {}
-void ts3plugin_onChannelPasswordChangedEvent(uint64 serverConnectionHandlerID, uint64 channelID) {}
-void ts3plugin_onPlaybackShutdownCompleteEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onSoundDeviceListChangedEvent(const char* modeID, int playOrCap) {}
-void ts3plugin_onEditPlaybackVoiceDataEvent(uint64 serverConnectionHandlerID, anyID clientID, short* samples, int sampleCount, int channels) {}
-void ts3plugin_onEditPostProcessVoiceDataEvent(uint64 serverConnectionHandlerID, anyID clientID, short* samples, int sampleCount, int channels, const unsigned int* channelSpeakerArray, unsigned int* channelFillMask) {}
-void ts3plugin_onEditMixedPlaybackVoiceDataEvent(uint64 serverConnectionHandlerID, short* samples, int sampleCount, int channels, const unsigned int* channelSpeakerArray, unsigned int* channelFillMask) {}
-void ts3plugin_onEditCapturedVoiceDataEvent(uint64 serverConnectionHandlerID, short* samples, int sampleCount, int channels, int* edited) {}
-void ts3plugin_onCustom3dRolloffCalculationClientEvent(uint64 serverConnectionHandlerID, anyID clientID, float distance, float* volume) {}
-void ts3plugin_onCustom3dRolloffCalculationWaveEvent(uint64 serverConnectionHandlerID, uint64 waveHandle, float distance, float* volume) {}
-void ts3plugin_onUserLoggingMessageEvent(const char* logMessage, int logLevel, const char* logChannel, uint64 logID, const char* logTime, const char* completeLogString) {}
-void ts3plugin_onClientBanFromServerEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID kickerID, const char* kickerName, const char* kickerUniqueIdentifier, uint64 time, const char* kickMessage) {}
-int ts3plugin_onClientPokeEvent(uint64 serverConnectionHandlerID, anyID fromClientID, const char* pokerName, const char* pokerUniqueIdentity, const char* message, int ffIgnored) { return 0; }
-void ts3plugin_onClientSelfVariableUpdateEvent(uint64 serverConnectionHandlerID, int flag, const char* oldValue, const char* newValue) {}
-void ts3plugin_onFileListEvent(uint64 serverConnectionHandlerID, uint64 channelID, const char* path, const char* name, uint64 size, uint64 datetime, int type, uint64 incompletesize, const char* returnCode) {}
-void ts3plugin_onFileListFinishedEvent(uint64 serverConnectionHandlerID, uint64 channelID, const char* path) {}
-void ts3plugin_onFileInfoEvent(uint64 serverConnectionHandlerID, uint64 channelID, const char* name, uint64 size, uint64 datetime) {}
-void ts3plugin_onAvatarUpdated(uint64 serverConnectionHandlerID, anyID clientID, const char* avatarPath) {}
-void ts3plugin_onHotkeyEvent(const char* keyword) {}
-void ts3plugin_onHotkeyRecordedEvent(const char* keyword, const char* key) {}
-void ts3plugin_onClientDisplayNameChanged(uint64 serverConnectionHandlerID, anyID clientID, const char* displayName, const char* uniqueClientIdentifier) {}
-
-/* All the rare event callbacks as stubs */
-void ts3plugin_onServerGroupListEvent(uint64 serverConnectionHandlerID, uint64 serverGroupID, const char* name, int type, int iconID, int saveDB) {}
-void ts3plugin_onServerGroupListFinishedEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onServerGroupByClientIDEvent(uint64 serverConnectionHandlerID, const char* name, uint64 serverGroupList, uint64 clientDatabaseID) {}
-void ts3plugin_onServerGroupPermListEvent(uint64 serverConnectionHandlerID, uint64 serverGroupID, unsigned int permissionID, int permissionValue, int permissionNegated, int permissionSkip) {}
-void ts3plugin_onServerGroupPermListFinishedEvent(uint64 serverConnectionHandlerID, uint64 serverGroupID) {}
-void ts3plugin_onServerGroupClientListEvent(uint64 serverConnectionHandlerID, uint64 serverGroupID, uint64 clientDatabaseID, const char* clientNameIdentifier, const char* clientUniqueID) {}
-void ts3plugin_onChannelGroupListEvent(uint64 serverConnectionHandlerID, uint64 channelGroupID, const char* name, int type, int iconID, int saveDB) {}
-void ts3plugin_onChannelGroupListFinishedEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onChannelGroupPermListEvent(uint64 serverConnectionHandlerID, uint64 channelGroupID, unsigned int permissionID, int permissionValue, int permissionNegated, int permissionSkip) {}
-void ts3plugin_onChannelGroupPermListFinishedEvent(uint64 serverConnectionHandlerID, uint64 channelGroupID) {}
-void ts3plugin_onChannelPermListEvent(uint64 serverConnectionHandlerID, uint64 channelID, unsigned int permissionID, int permissionValue, int permissionNegated, int permissionSkip) {}
-void ts3plugin_onChannelPermListFinishedEvent(uint64 serverConnectionHandlerID, uint64 channelID) {}
-void ts3plugin_onClientPermListEvent(uint64 serverConnectionHandlerID, uint64 clientDatabaseID, unsigned int permissionID, int permissionValue, int permissionNegated, int permissionSkip) {}
-void ts3plugin_onClientPermListFinishedEvent(uint64 serverConnectionHandlerID, uint64 clientDatabaseID) {}
-void ts3plugin_onChannelClientPermListEvent(uint64 serverConnectionHandlerID, uint64 channelID, uint64 clientDatabaseID, unsigned int permissionID, int permissionValue, int permissionNegated, int permissionSkip) {}
-void ts3plugin_onChannelClientPermListFinishedEvent(uint64 serverConnectionHandlerID, uint64 channelID, uint64 clientDatabaseID) {}
-void ts3plugin_onClientChannelGroupChangedEvent(uint64 serverConnectionHandlerID, uint64 channelGroupID, uint64 channelID, anyID clientID, anyID invokerClientID, const char* invokerName, const char* invokerUniqueIdentity) {}
-int ts3plugin_onServerPermissionErrorEvent(uint64 serverConnectionHandlerID, const char* errorMessage, unsigned int error, const char* returnCode, unsigned int failedPermissionID) { return 0; }
-void ts3plugin_onPermissionListGroupEndIDEvent(uint64 serverConnectionHandlerID, unsigned int groupEndID) {}
-void ts3plugin_onPermissionListEvent(uint64 serverConnectionHandlerID, unsigned int permissionID, const char* permissionName, const char* permissionDescription) {}
-void ts3plugin_onPermissionListFinishedEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onPermissionOverviewEvent(uint64 serverConnectionHandlerID, uint64 clientDatabaseID, uint64 channelID, int overviewType, uint64 overviewID1, uint64 overviewID2, unsigned int permissionID, int permissionValue, int permissionNegated, int permissionSkip) {}
-void ts3plugin_onPermissionOverviewFinishedEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onServerGroupClientAddedEvent(uint64 serverConnectionHandlerID, anyID clientID, const char* clientName, const char* clientUniqueIdentity, uint64 serverGroupID, anyID invokerClientID, const char* invokerName, const char* invokerUniqueIdentity) {}
-void ts3plugin_onServerGroupClientDeletedEvent(uint64 serverConnectionHandlerID, anyID clientID, const char* clientName, const char* clientUniqueIdentity, uint64 serverGroupID, anyID invokerClientID, const char* invokerName, const char* invokerUniqueIdentity) {}
-void ts3plugin_onClientNeededPermissionsEvent(uint64 serverConnectionHandlerID, unsigned int permissionID, int permissionValue) {}
-void ts3plugin_onClientNeededPermissionsFinishedEvent(uint64 serverConnectionHandlerID) {}
-void ts3plugin_onFileTransferStatusEvent(anyID transferID, unsigned int status, const char* statusMessage, uint64 remotefileSize, uint64 serverConnectionHandlerID) {}
-void ts3plugin_onClientChatClosedEvent(uint64 serverConnectionHandlerID, anyID clientID, const char* clientUniqueIdentity) {}
-void ts3plugin_onClientChatComposingEvent(uint64 serverConnectionHandlerID, anyID clientID, const char* clientUniqueIdentity) {}
-void ts3plugin_onServerLogEvent(uint64 serverConnectionHandlerID, const char* logMsg) {}
-void ts3plugin_onServerLogFinishedEvent(uint64 serverConnectionHandlerID, uint64 lastPos, uint64 fileSize) {}
-void ts3plugin_onMessageListEvent(uint64 serverConnectionHandlerID, uint64 messageID, const char* fromClientUniqueIdentity, const char* subject, uint64 timestamp, int flagRead) {}
-void ts3plugin_onMessageGetEvent(uint64 serverConnectionHandlerID, uint64 messageID, const char* fromClientUniqueIdentity, const char* subject, const char* message, uint64 timestamp) {}
-void ts3plugin_onClientDBIDfromUIDEvent(uint64 serverConnectionHandlerID, const char* uniqueClientIdentifier, uint64 clientDatabaseID) {}
-void ts3plugin_onClientNamefromUIDEvent(uint64 serverConnectionHandlerID, const char* uniqueClientIdentifier, uint64 clientDatabaseID, const char* clientNickName) {}
-void ts3plugin_onClientNamefromDBIDEvent(uint64 serverConnectionHandlerID, const char* uniqueClientIdentifier, uint64 clientDatabaseID, const char* clientNickName) {}
-void ts3plugin_onComplainListEvent(uint64 serverConnectionHandlerID, uint64 targetClientDatabaseID, const char* targetClientNickName, uint64 fromClientDatabaseID, const char* fromClientNickName, const char* complainReason, uint64 timestamp) {}
-void ts3plugin_onBanListEvent(uint64 serverConnectionHandlerID, uint64 banid, const char* ip, const char* name, const char* uid, const char* mytsid, uint64 creationTime, uint64 durationTime, const char* invokerName, uint64 invokercldbid, const char* invokeruid, const char* reason, int numberOfEnforcements, const char* lastNickName) {}
-void ts3plugin_onClientServerQueryLoginPasswordEvent(uint64 serverConnectionHandlerID, const char* loginPassword) {}
-void ts3plugin_onPluginCommandEvent(uint64 serverConnectionHandlerID, const char* pluginName, const char* pluginCommand, anyID invokerClientID, const char* invokerName, const char* invokerUniqueIdentity) {}
-void ts3plugin_onIncomingClientQueryEvent(uint64 serverConnectionHandlerID, const char* commandText) {}
-void ts3plugin_onServerTemporaryPasswordListEvent(uint64 serverConnectionHandlerID, const char* clientNickname, const char* uniqueClientIdentifier, const char* description, const char* password, uint64 timestampStart, uint64 timestampEnd, uint64 targetChannelID, const char* targetChannelPW) {}
-
-const char* ts3plugin_keyDeviceName(const char* keyIdentifier) { return NULL; }
-const char* ts3plugin_displayKeyText(const char* keyIdentifier) { return NULL; }
-const char* ts3plugin_keyPrefix() { return NULL; } 
